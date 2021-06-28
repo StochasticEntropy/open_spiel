@@ -54,8 +54,8 @@ from datetime import datetime
 
 # The size of the shuffle buffer used to reshuffle part of the data each
 # epoch within one training iteration
-ADVANTAGE_TRAIN_DATASET_SIZE = 100000
-STRATEGY_TRAIN_DATASET_SIZE = 1000000
+ADVANTAGE_TRAIN_SHUFFLE_SIZE = 100000
+STRATEGY_TRAIN_SHUFFLE_SIZE = 1000000
 
 
 # TODO(author3) Refactor into data structures lib.
@@ -244,14 +244,15 @@ class DeepCFRSolver(policy.Policy):
 
     self._create_memories(memory_capacity)
 
-    self._jitted_maxed_regrets = jax.jit(self._get_jitted_matched_regrets())
-    self._jitted_adv_update = jax.jit(self.get_jitted_adv_update())
-    self._jitted_policy_update = jax.jit(self.get_jitted_policy_update())
+    self._jitted_matched_regrets = self._get_jitted_matched_regrets()
+    self._jitted_adv_update = self.get_jitted_adv_update()
+    self._jitted_policy_update = self.get_jitted_policy_update()
 
   def get_jitted_adv_update(self):
+    """get jitted advantage update function."""
+    @jax.jit
     def update(params_adv, opt_state, info_states, samp_regrets, iterations, masks,
             total_iterations):
-      print('jitting')
       main_loss, grads = self._adv_grads(params_adv,
             info_states, samp_regrets, iterations, masks, total_iterations)
       updates, new_opt_state = self._opt_adv_update(
@@ -263,9 +264,10 @@ class DeepCFRSolver(policy.Policy):
     return update
 
   def get_jitted_policy_update(self):
+    """get jitted policy update function."""
+    @jax.jit
     def update(params_policy, opt_state, info_states, action_probs, iterations, masks,
             total_iterations):
-      print('jitting')
       main_loss, grads = self._policy_grads(params_policy,
             info_states, action_probs, iterations, masks, total_iterations)
       updates, new_opt_state = self._opt_policy_update(
@@ -277,9 +279,9 @@ class DeepCFRSolver(policy.Policy):
     return update
 
   def _get_jitted_matched_regrets(self):
+    """get jitted regret matching function."""
+    @jax.jit
     def get_matched_regrets(info_state, legal_actions_mask, params_adv):
-      """TF-Graph to calculate regret matching."""
-      #print('jitting')
       advs = self._hk_adv_network.apply(params_adv,
             info_state, legal_actions_mask)
       advantages = jnp.maximum(advs, 0)
@@ -290,16 +292,11 @@ class DeepCFRSolver(policy.Policy):
             jnp.argmax(jnp.where(legal_actions_mask == 1, advs, -10e20)),
             self._num_actions),
         None)
-      # if summed_regret > 0:
-      #   matched_regrets = advantages / summed_regret
-      # else:
-      #   matched_regrets = jax.nn.one_hot(
-      #       jnp.argmax(jnp.where(legal_actions_mask == 1, advs, -10e20)),
-      #       self._num_actions)
       return advantages, matched_regrets
     return get_matched_regrets
 
   def _next_rng_key(self):
+    """ get next rng subkey from class rngkey."""
     self._rngkey, subkey = jax.random.split(self._rngkey)
     return subkey
 
@@ -468,9 +465,6 @@ class DeepCFRSolver(policy.Policy):
           self._serialize_advantage_memory(state.information_state_tensor(),
                                            self._iteration, samp_regret,
                                            state.legal_actions_mask(player)))
-      # self._advantage_memories[player].add((state.information_state_tensor(),
-      #                                      self._iteration, samp_regret,
-      #                                      state.legal_actions_mask(player)))
       return ev
     else:
       other_player = state.current_player()
@@ -485,22 +479,6 @@ class DeepCFRSolver(policy.Policy):
           strategy, state.legal_actions_mask(other_player))
       return self._traverse_game_tree(state.child(sampled_action), player)
 
-  # #@tf.function
-  # #@jax.partial(jax.jit, static_argnums=3)
-  # def _get_matched_regrets(self, info_state, legal_actions_mask, player):
-  #   """TF-Graph to calculate regret matching."""
-  #   print('jitting')
-  #   advs = self._hk_adv_network.apply(self._params_adv_network[player],
-  #         info_state, legal_actions_mask)
-  #   advantages = jnp.maximum(advs, 0)
-  #   summed_regret = jnp.sum(advantages)
-  #   # if summed_regret > 0:
-  #   matched_regrets = advantages / summed_regret
-  #   # else:
-  #   #   matched_regrets = jax.nn.one_hot(
-  #   #       jnp.argmax(jnp.where(legal_actions_mask == 1, advs, -10e20)),
-  #   #       self._num_actions)
-  #   return advantages, matched_regrets
 
   def _sample_action_from_advantage(self, state, player):
     """Returns an info state policy by applying regret-matching.
@@ -513,33 +491,11 @@ class DeepCFRSolver(policy.Policy):
       1. (np-array) Advantage values for info state actions indexed by action.
       2. (np-array) Matched regrets, prob for actions indexed by action.
     """
-    # @jax.jit
-    # def get_matched_regrets(info_state, legal_actions_mask, params_adv):
-    #   """TF-Graph to calculate regret matching."""
-    #   print('jitting')
-    #   advs = self._hk_adv_network.apply(params_adv,
-    #         info_state, legal_actions_mask)
-    #   advantages = jnp.maximum(advs, 0)
-    #   summed_regret = jnp.sum(advantages)
-    #   matched_regrets = jax.lax.cond(summed_regret > 0,
-    #     lambda _: advantages / summed_regret,
-    #     lambda _: jax.nn.one_hot(
-    #         jnp.argmax(jnp.where(legal_actions_mask == 1, advs, -10e20)),
-    #         self._num_actions),
-    #     None)
-    #   # if summed_regret > 0:
-    #   #   matched_regrets = advantages / summed_regret
-    #   # else:
-    #   #   matched_regrets = jax.nn.one_hot(
-    #   #       jnp.argmax(jnp.where(legal_actions_mask == 1, advs, -10e20)),
-    #   #       self._num_actions)
-    #   return advantages, matched_regrets
-
     info_state = jnp.array(
         state.information_state_tensor(player), dtype=jnp.float32)
     legal_actions_mask = jnp.array(
         state.legal_actions_mask(player), dtype=jnp.float32)
-    advantages, matched_regrets = self._jitted_maxed_regrets(
+    advantages, matched_regrets = self._jitted_matched_regrets(
         info_state, legal_actions_mask, self._params_adv_network[player])
     return advantages, matched_regrets
 
@@ -547,43 +503,22 @@ class DeepCFRSolver(policy.Policy):
     """Returns action probabilities dict for a single batch."""
     cur_player = state.current_player()
     legal_actions = state.legal_actions(cur_player)
-    # legal_actions_mask = tf.constant(
-    #     state.legal_actions_mask(cur_player), dtype=tf.float32)
-    # info_state_vector = tf.constant(
-    #     state.information_state_tensor(), dtype=tf.float32)
     info_state_vector = jnp.array(
         state.information_state_tensor(), dtype=jnp.float32)
     legal_actions_mask = jnp.array(
         state.legal_actions_mask(cur_player), dtype=jnp.float32)
-    # if len(info_state_vector.shape) == 1:
-    #   info_state_vector = tf.expand_dims(info_state_vector, axis=0)
     probs = self._hk_policy_network.apply(self._params_policy_network,
           info_state_vector, legal_actions_mask)
-    # probs = self._policy_network((info_state_vector, legal_actions_mask),
-    #                              training=False)
-    # probs = probs.numpy()
     return {action: probs[action] for action in legal_actions}
 
-  def _sample_advantage_dataset(self, player, nr_steps=1):
+  def _get_advantage_dataset(self, player, nr_steps=1):
     """Returns the collected regrets for the given player as a dataset.
-    yields list with stacked tensors
-          [state.information_state_tensor(),
-          self._iteration,
-          samp_regret,
-          state.legal_actions_mask(player)]
-    """
-    # bs = min(self._batch_size_advantage, len(self._advantage_memories[player]))
-    # for _ in range(nr_steps):
-    #   data = self._advantage_memories[player].sample(bs)
-    #   restacked = [jnp.stack([jnp.array(x[i]) for x in data]) for i in range(len(data[0]))]
-    #   yield restacked
-
-    
+    """    
     self._advantage_memories[player].shuffle_data()
     self._advantage_memories[player]
     data = tf.data.Dataset.from_tensor_slices(
         self._advantage_memories[player].data)
-    data = data.shuffle(ADVANTAGE_TRAIN_DATASET_SIZE)
+    data = data.shuffle(ADVANTAGE_TRAIN_SHUFFLE_SIZE)
     data = data.repeat()
     data = data.batch(self._batch_size_advantage)
     data = data.map(self._deserialize_advantage_memory)
@@ -591,21 +526,11 @@ class DeepCFRSolver(policy.Policy):
     data = data.take(nr_steps)
     return iter(tfds.as_numpy(data))
 
-  def _sample_strategy_dataset(self, nr_steps=1):
-    """Returns the collected strategy memories as a dataset.
-    """
-    # s = min(self._batch_size_strategy, len(self._strategy_memories))
-    # for _ in range(nr_steps):
-    #   data = self._strategy_memories.sample(bs)
-    #   restacked = [jnp.stack([jnp.array(x[i]) for x in data]) for i in range(len(data[0]))]
-    #   yield restacked
-
-    # if self._memories_tfrecordpath:
-    #   data = tf.data.TFRecordDataset(self._memories_tfrecordpath)
-    # else:
+  def _get_strategy_dataset(self, nr_steps=1):
+    """Returns the collected strategy memories as a dataset."""
     self._strategy_memories.shuffle_data()
     data = tf.data.Dataset.from_tensor_slices(self._strategy_memories.data)
-    data = data.shuffle(STRATEGY_TRAIN_DATASET_SIZE)
+    data = data.shuffle(STRATEGY_TRAIN_SHUFFLE_SIZE)
     data = data.repeat()
     data = data.batch(self._batch_size_strategy)
     data = data.map(self._deserialize_strategy_memory)
@@ -613,25 +538,10 @@ class DeepCFRSolver(policy.Policy):
     data = data.take(nr_steps)
     return iter(tfds.as_numpy(data))
 
-  # def _get_advantage_train_graph(self, player):
-  #   """Return TF-Graph to perform advantage network train step."""
-  #   @tf.function
-  #   def train_step(info_states, advantages, iterations, masks, iteration):
-  #     model = self._adv_networks_train[player]
-  #     with tf.GradientTape() as tape:
-  #       preds = model((info_states, masks), training=True)
-  #       main_loss = self._loss_advantages[player](
-  #           advantages, preds, sample_weight=iterations * 2 / iteration)
-  #       loss = tf.add_n([main_loss], model.losses)
-  #     gradients = tape.gradient(loss, model.trainable_variables)
-  #     self._optimizer_advantages[player].apply_gradients(
-  #         zip(gradients, model.trainable_variables))
-  #     return main_loss
-
-  #   return train_step
-
   def _loss_adv(self, params_adv, info_states, samp_regrets, iterations, masks,
             total_iterations):
+    """Loss function for our advantage network with respect to network parameters
+    and collected data"""
     preds = self._hk_adv_network.apply(params_adv, info_states, masks)
     loss_values = jnp.mean(self._adv_loss(preds, samp_regrets), axis=-1)
     loss_values = loss_values * iterations * 2 / total_iterations
@@ -651,68 +561,18 @@ class DeepCFRSolver(policy.Policy):
     Returns:
       The average loss over the advantage network of the last batch.
     """
-    # @jax.jit
-    # def update(params_adv, opt_state, info_states, samp_regrets, iterations, masks,
-    #         total_iterations):
-    #   print('jitting')
-    #   main_loss, grads = self._adv_grads(params_adv,
-    #         info_states, samp_regrets, iterations, masks, total_iterations)
-    #   updates, new_opt_state = self._opt_adv_update(
-    #         grads, opt_state)
-    #   new_params = optax.apply_updates(
-    #           params_adv, updates)
-    #   return new_params, new_opt_state, main_loss
-
-    print(datetime.now())
-    print(f'iteration {self._iteration}: start training')
-    i = 0
-    for data in self._sample_advantage_dataset(player,
+    for data in self._get_advantage_dataset(player,
           self._advantage_network_train_steps):
-      # if i%1 == 0:
-      #   print(f'a{i}: {datetime.now()}')
       self._params_adv_network[player], self._opt_adv_state[player], main_loss =\
         self._jitted_adv_update(self._params_adv_network[player], self._opt_adv_state[player],
         *data, jnp.array(self._iteration))
-      i+=1
-      # if i%1 == 0:
-      #   print(f'b{i}: {datetime.now()}')
-      # if i==self._advantage_network_train_steps:
-      #   break
-      # main_loss, grads = self._adv_grads(self._params_adv_network[player],
-      #       *data, self._iteration)
-      # updates, self._opt_adv_state[player] = self._opt_adv_update(
-      #       grads, self._opt_adv_state[player])
-      # self._params_adv_network[player] = optax.apply_updates(
-      #         self._params_adv_network[player], updates)
     
-    print(datetime.now())
-    print(f'iteration {self._iteration}: finished training')
-    # with tf.device(self._train_device):
-    #   tfit = tf.constant(self._iteration, dtype=tf.float32)
-    #   data = self._get_advantage_dataset(player)
-    #   for d in data.take(self._advantage_network_train_steps):
-    #     main_loss = self._advantage_train_step[player](*d, tfit)
-
-    # self._adv_networks[player].set_weights(
-    #     self._adv_networks_train[player].get_weights())
     return main_loss
-
-  # def _get_strategy_dataset(self):
-  #   """Returns the collected strategy memories as a dataset."""
-  #   if self._memories_tfrecordpath:
-  #     data = tf.data.TFRecordDataset(self._memories_tfrecordpath)
-  #   else:
-  #     self._strategy_memories.shuffle_data()
-  #     data = tf.data.Dataset.from_tensor_slices(self._strategy_memories.data)
-  #   data = data.shuffle(STRATEGY_TRAIN_DATASET_SIZE)
-  #   data = data.repeat()
-  #   data = data.batch(self._batch_size_strategy)
-  #   data = data.map(self._deserialize_strategy_memory)
-  #   data = data.prefetch(tf.data.experimental.AUTOTUNE)
-  #   return data
 
   def _loss_policy(self, params_policy, info_states, action_probs, iterations,
               masks, total_iterations):
+    """Loss function for our policy network with respect to network parameters
+    and collected data"""
     preds = self._hk_policy_network.apply(params_policy, info_states, masks)
     loss_values = jnp.mean(self._policy_loss(preds, action_probs), axis=-1)
     loss_values = loss_values * iterations * 2 / total_iterations
@@ -725,69 +585,10 @@ class DeepCFRSolver(policy.Policy):
       The average loss obtained on the last training batch of transitions
       or `None`.
     """
-
-    # @jax.jit
-    # def update(params_policy, opt_state, info_states, action_probs, iterations, masks,
-    #         total_iterations):
-    #   print('jitting')
-    #   main_loss, grads = self._policy_grads(params_policy,
-    #         info_states, action_probs, iterations, masks, total_iterations)
-    #   updates, new_opt_state = self._opt_policy_update(
-    #         grads, opt_state)
-    #   new_params = optax.apply_updates(
-    #           params_policy, updates)
-    #   return new_params, new_opt_state, main_loss
-
-    print(datetime.now())
-    print(f'policy: start training')
-    i = 0
-    for data in self._sample_strategy_dataset(
+    for data in self._get_strategy_dataset(
           self._policy_network_train_steps):
-      # if i%1 == 0:
-      #   print(f'a{i}: {datetime.now()}')
       self._params_policy_network, self._opt_policy_state, main_loss =\
         self._jitted_policy_update(self._params_policy_network, self._opt_policy_state,
         *data, self._iteration)
-      i+=1
-      # if i%1 == 0:
-      #   print(f'b{i}: {datetime.now()}')
-      # if i==self._policy_network_train_steps:
-      #   break
-      # main_loss, grads = self._adv_grads(self._params_adv_network[player],
-      #       *data, self._iteration)
-      # updates, self._opt_adv_state[player] = self._opt_adv_update(
-      #       grads, self._opt_adv_state[player])
-      # self._params_adv_network[player] = optax.apply_updates(
-      #         self._params_adv_network[player], updates)
-    
-    print(datetime.now())
-    print(f'policy: finished training')
-
-    # for data in self._sample_strategy_dataset(
-    #       self._policy_network_train_steps):
-    #   main_loss, grads = self._policy_grads(self._params_policy_network,
-    #         *data, self._iteration)
-    #   updates, self._opt_policy_state = self._opt_policy_update(
-    #         grads, self._opt_policy_state)
-    #   self._params_policy_network = optax.apply_updates(
-    #           self._params_policy_network, updates)
-
-    # @tf.function
-    # def train_step(info_states, action_probs, iterations, masks):
-    #   model = self._policy_network
-    #   with tf.GradientTape() as tape:
-    #     preds = model((info_states, masks), training=True)
-    #     main_loss = self._loss_policy(
-    #         action_probs, preds, sample_weight=iterations * 2 / self._iteration)
-    #     loss = tf.add_n([main_loss], model.losses)
-    #   gradients = tape.gradient(loss, model.trainable_variables)
-    #   self._optimizer_policy.apply_gradients(
-    #       zip(gradients, model.trainable_variables))
-    #   return main_loss
-
-    # with tf.device(self._train_device):
-    #   data = self._get_strategy_dataset()
-    #   for d in data.take(self._policy_network_train_steps):
-    #     main_loss = train_step(*d)
 
     return main_loss
