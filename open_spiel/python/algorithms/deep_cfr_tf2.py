@@ -43,7 +43,8 @@ from open_spiel.python import policy
 import pyspiel
 
 
-# The number of examples to pull out of the entire data set when training
+# The size of the shuffle buffer used to reshuffle part of the data each
+# epoch within one training iteration
 ADVANTAGE_TRAIN_DATASET_SIZE = 100000
 STRATEGY_TRAIN_DATASET_SIZE = 1000000
 
